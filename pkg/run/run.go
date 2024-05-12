@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"rr/pkg/logdb"
+	"rr/gen/go/proto/rr"
+	"rr/pkg/eventdb"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/shlex"
 	"github.com/oklog/ulid"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,7 +29,9 @@ type Execution struct {
 	id string
 
 	run *Run
-	log *logdb.LogDB
+	log *eventdb.EventDB
+
+	count int64
 
 	cond   *sync.Cond
 	events int64
@@ -43,7 +48,7 @@ type Command struct {
 }
 
 type Follower interface {
-	Render(logdb.RawEvent) error
+	Render(*rr.Event) error
 }
 
 func File(p string, follower Follower) error {
@@ -71,7 +76,7 @@ func Exec(run *Run, local bool, follower Follower) error {
 	// TODO: create uniqe id for the run.
 
 	// Create database for the run.
-	log, err := logdb.NewLogDB(dbPath)
+	log, err := eventdb.NewEventDB(dbPath, eventMap)
 	if err != nil {
 		return err
 	}
@@ -115,7 +120,7 @@ func (e *Execution) Attach(display Follower) error {
 				return err
 			}
 			for _, event := range events {
-				last = event.ID
+				last = event.Id
 				if err := display.Render(event); err != nil {
 					fmt.Printf("FIXME: failed to render event\n")
 					return err
@@ -139,7 +144,7 @@ func (e *Execution) WaitForEvent(n int64) (int64, bool) {
 	return lines, !done
 }
 
-func (e *Execution) Events(n, max int64) ([]logdb.RawEvent, error) {
+func (e *Execution) Events(n, max int64) ([]*rr.Event, error) {
 	return e.log.Events(n, max)
 }
 
@@ -182,10 +187,15 @@ func (e *Execution) remote() {
 
 func (e *Execution) runCommand(cmdID int, c Command) error {
 
-	if _, err := e.Event(Event{
-		grp:  cmdID,
-		typ:  RUN,
-		data: []byte(c.Run),
+	if err := e.Event(&rr.Event{
+		Id:        atomic.AddInt64(&e.count, 1),
+		Timestamp: timestamppb.Now(),
+		Group:     int32(cmdID),
+		Event: &rr.Event_RunEvent{
+			RunEvent: &rr.RunEvent{
+				Command: c.Run,
+			},
+		},
 	}); err != nil {
 		return err
 	}
@@ -228,17 +238,17 @@ func (e *Execution) runCommand(cmdID int, c Command) error {
 	return nil
 }
 
-func (e *Execution) Event(event logdb.Event) (int64, error) {
-	id, err := e.log.Event(event)
+func (e *Execution) Event(event *rr.Event) error {
+	err := e.log.Event(event)
 	e.cond.L.Lock()
 	if err == nil {
-		e.events = id
+		e.events = event.Id
 	} else {
 		e.done = true
 	}
 	e.cond.Broadcast()
 	e.cond.L.Unlock()
-	return id, err
+	return err
 }
 
 func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup) {
@@ -250,13 +260,28 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 
 		// TODO: process command filters and transformations
 
-		event := Event{
-			grp:  grp,
-			typ:  typ,
-			data: []byte(line),
+		event := &rr.Event{
+			Id:        atomic.AddInt64(&e.count, 1),
+			Group:     int32(grp),
+			Timestamp: timestamppb.Now(),
 		}
 
-		if _, err := e.Event(event); err != nil {
+		switch typ {
+		case STDOUT:
+			event.Event = &rr.Event_StdoutEvent{
+				StdoutEvent: &rr.StdOutEvent{
+					Data: []byte(line),
+				},
+			}
+		case STDERR:
+			event.Event = &rr.Event_StderrEvent{
+				StderrEvent: &rr.StdErrEvent{
+					Data: []byte(line),
+				},
+			}
+		}
+
+		if err := e.Event(event); err != nil {
 			fmt.Printf("failed to log event: %v", err)
 		}
 	}

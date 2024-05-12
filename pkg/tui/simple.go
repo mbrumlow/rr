@@ -3,21 +3,21 @@ package tui
 import (
 	"fmt"
 	"os"
-	"rr/pkg/logdb"
-	"rr/pkg/run"
+	"rr/gen/go/proto/rr"
 )
 
 type Simple struct {
 }
 
-func (s *Simple) Render(event logdb.RawEvent) error {
-	switch event.Type {
-	case run.STDOUT:
-		fmt.Fprintln(os.Stdout, string(event.Data))
-	case run.STDERR:
-		fmt.Fprintln(os.Stderr, string(event.Data))
-	case run.RUN:
-		fmt.Fprintf(os.Stdout, "> %v\n", string(event.Data))
+func (s *Simple) Render(event *rr.Event) error {
+	switch e := event.Event.(type) {
+	case *rr.Event_RunEvent:
+		fmt.Fprintf(os.Stdout, "> %v\n", e.RunEvent.Command)
+	case *rr.Event_StdoutEvent:
+		fmt.Fprintln(os.Stdout, string(e.StdoutEvent.Data))
+	case *rr.Event_StderrEvent:
+		fmt.Fprintln(os.Stderr, string(e.StderrEvent.Data))
 	}
+
 	return nil
 }
