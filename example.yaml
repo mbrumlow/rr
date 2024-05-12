@@ -1,0 +1,93 @@
+name: happy-puppy # simple name for when viewing execution history
+
+# default will probably be git for git bash
+features: [ tempdir, getsync, go, syncdir, git ]
+
+# Features
+# tmpdir - sync to a temp directory
+# getsync - checkout current git repo to run dir, and sync local changes
+# go - ensure a copy of go exist on the remote system.
+# git - ensure that a copy of git is usable by the runner
+# syncdir - sync directory where this file is as root to run dir
+
+# Features that might be nice to have. 
+# python
+# rust
+# uutils coreutisl?
+
+# vars can be passed in with -var foo=baz, to override ones in file
+vars:
+  - foo: baz
+  - zip: zorp
+
+cwd: ~/foo # run directory (the working directory to set before starting)
+work-directory: ~/baz # the work directory to sync files too if tmpdir is not used
+
+# global env vars for all of the execution 
+env:
+  - FUN: time
+  - COOL: beans
+
+# Files will be synced to the coordination server on execution.
+# When ran on the target they will be downloaded to the target
+# and placed in the the temp execution directory before running. 
+files:
+  local:
+    - foo     # dir 
+    - baz.txt # text
+  remote:
+    - /full/path # we don't know our context 
+
+commands:
+  local:
+    - run: ls -la
+    - run: date
+    - run: whoami
+    - run: find .
+    # - run: find / 
+  
+  # local: 
+  #   - run: ls -la   
+  #     cwd: ~/woizer # which directory to switch to before running.
+  #     env:
+  #       - FOO: BAZ
+  #         - WOZER: FOOT 
+        
+#   # defaults to git bash? 
+#   - run: |      
+#       ls -la
+
+#   - run: ls -la
+
+      
+#   # tempting
+#   - run: |
+#       echo "{{var $zip}}"
+#       echo "{{env FOO}}" 
+#     store: zip  # stores the output of the run into a var named zip so it can be rendered 
+#     trim: true  # removes leading and trailing white space
+#     regex: s/f/b/g # runs regex replace on output
+#     match: ^log # filters lines that do not match 
+    
+#   - run: |
+#       echo "{{$zip}}" 
+      
+# # the agent running will know how to download go for its own platform
+# # and setup the compiler so it can compile and run go.
+# # it will be smart by storing the binaries in a CAS, so you don't have
+# # to recompile every time you run. 
+#   - run: go build
+      
+#   - run: |
+#       go run 
+#     data: |
+#       package main
+
+#       import "fmt"
+      
+#       func main() {
+#          fmt.Printf("hello world")
+#       }
+    
+
+

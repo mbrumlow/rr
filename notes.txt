@@ -1,0 +1,137 @@
+// func FileOld(p string, follower Follower) error {
+
+// 	// TODO: laod file
+
+// 	file, err := os.Open(p)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	r := &Run{}
+// 	if err := yaml.NewDecoder(file).Decode(r); err != nil {
+// 		return err
+// 	}
+
+// 	var mu sync.Mutex
+// 	r.cond = sync.NewCond(&mu)
+
+// 	go r.Run()
+
+// 	return r.Attach(follower)
+
+// 	// Gather remote info needed to run.
+// 	// r.Run()
+// 	// Send to remote system.
+// 	// On remote system r.Run()
+// 	// Stream logs back.
+
+// 	// On reconnect stream at point, but also sync from last in background.
+
+// 	// A command can have a unsynced state (it should show that it is not fully synced)
+// 	// A command has a running state // running
+// 	// A command has a sync stated (not running, but results not copied)
+
+// 	// log format options
+// 	// (time sense) log line
+// 	// (time stamp) log ling
+// 	// log line
+
+// 	//	return nil
+// }
+
+
+// func (e *Execution) GetLines(n, max int64) ([]logdb.LogLine, error) {
+// 	return e.log.GetLines(n, max)
+// }
+
+// THOUGHTS
+// We what the following for a watcher
+// They can render a log line how ever they want
+// They are aware of the command being ran, and are notified when the command changes.
+// Do we us channel?
+// <log line>
+// <log line>
+// <log line>
+// <active command>
+
+// We need a line to -> db class This class simply logs lines from its input
+// into the db with the given command id. It also needs to notify the runner
+// when new log lines are added and what the max log line is now.
+
+// The runner can register as many watchers as it likes and it will be able to
+// read from the database the lines it needs to send to each watcher depending
+// on where they are in the process, some might be faster and some might be
+// slower, we will normally just have one though.
+
+// The watcher ends when the commands are done with a exit message?
+// func (r *Run) Run() error {
+
+// 	// TODO: create uniqe id for the run.
+
+// 	// Create database for the run.
+// 	log, err := logdb.NewLogDB("test")
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	// TODO: store original file in full.
+// 	// TODO: populate db with all commands and a starting state of waiting.
+
+// 	for cmdID, c := range r.Commands.Local {
+// 		// TODO: notify watchers we have changed commands.
+// 		if err := r.runCommand(cmdID, c, log); err != nil {
+// 			return nil
+// 		}
+// 	}
+
+// 	// TODO: send to remote system and wait for stream
+// 	// Stream: log lines back
+// 	// Final outputs and results of commands.
+
+// 	return nil
+// }
+
+// func Test() {
+// 	logCmd := logdb.Command(cmd, nr)
+// 	logCmd.Start()
+// 	for {
+// 		max, ok := logCmd.WaitLines()
+// 		if !ok {
+// 			break
+// 		}
+// 		// TODO: get lock, copy watcher list
+// 		for _, wacher := range watchers {
+// 			for i := watcher.Pos(), i <= max; i++ {
+// 			}
+// 		}
+// 	}
+// 	if err := logCmd.Error(); err != nil {
+// 		fmt.Printf("error logging command, logs may be incomplete\n")
+// 	}
+// }
+
+// NOTES:
+// Results are streamed back to the client.
+// Live results if on-going.
+// Otherwise copied locally before viewing.
+// Results might look like this
+// (1/3) ls -la
+// drwxr-xr-x mbrumlow users 4.0 KB Wed May  8 20:37:12 2024  .
+// drwxr-xr-x mbrumlow users 4.0 KB Tue May  7 19:24:23 2024  ..
+// drwxr-xr-x mbrumlow users 4.0 KB Wed May  8 20:00:48 2024  cmd
+// (2/3) date
+// Wed May  8 09:27:03 PM PDT 2024
+// (3/3) ps aux
+// ... +34 (if we attach in the middle of the run to continue
+// mbrumlow 1149663  0.0  0.0 2452084 59648 ?       Sl   21:27   0:00 /nix/store/xpmp5ls0nbadx9an23zqb9qm6l5wikmy-firefox-125.0.3/lib/firefox/root     1150178  0.0  0.0      0     0 ?        I    21:28   0:00 [kworker/18:1-rcu_par_gp]
+// root     1150179  0.0  0.0      0     0 ?        I    21:28   0:00 [kworker/6:2-inet_frag_wq]
+// mbrumlow 1150569  0.0  0.0  10328  3328 pts/6    R+   21:29   0:00 ps aux
+
+// STORAGE
+// Single sqlite database that holds all the information about the execution
+// One for local, and one for remote.
+// The remote one is merged into the local one.
+// Table holding command metadata, giving it a uniq command id.
+// Then log lines are stored in a log table with the following
+// auto id, command id, timestamp, fd, <text>
+

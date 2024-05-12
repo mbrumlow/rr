@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package example;
+
+option go_package = "rr/gen/go/rr";
+
+// Define a simple message
+message HelloRequest {
+  string name = 1;
+}
+
+message HelloResponse {
+  string message = 1;
+}
+
+// Define a simple service
+service Greeter {
+  rpc SayHello (HelloRequest) returns (HelloResponse);
+}
