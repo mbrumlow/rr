@@ -62,20 +62,6 @@ func (l *EventDB) Close() {
 	l.db.Close()
 }
 
-type Event interface {
-	Group() int
-	Type() int
-	Data() []byte
-}
-
-type RawEvent struct {
-	ID        int64
-	Timestamp string
-	Group     int
-	Type      int
-	Data      []byte
-}
-
 func (l *EventDB) Events(start, limit int64) ([]*rr.Event, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
