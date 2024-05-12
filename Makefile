@@ -2,14 +2,13 @@
 PROTO_DIR := proto
 GEN_DIR := gen/go
 PROTO_FILES := $(wildcard $(PROTO_DIR)/*.proto)
-GENERATED_FILES := $(PROTO_FILES:$(PROTO_DIR)/%.proto=$(GEN_DIR)/example/%.pb.go)
-
+GENERATED_FILES := $(PROTO_FILES:$(PROTO_DIR)/%.proto=$(GEN_DIR)/%.pb.go)
 
 all: proto
 
 proto: $(GENERATED_FILES)
 
-$(GEN_DIR)/example/%.pb.go: $(PROTO_DIR)/%.proto
+$(GEN_DIR)/%.pb.go: $(PROTO_DIR)/%.proto
 	buf generate
 
 

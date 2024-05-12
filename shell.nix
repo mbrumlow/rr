@@ -1,18 +1,19 @@
 { pkgs ? import <nixpkgs> {} }:
-let
-in
 with pkgs;
 mkShell rec {
-  name = "ge";
-  tools = [
-    buf
-    protoc-gen-go
-  ];
-  libs = [
-  ];
+    name = "go";
+    
+    tools = [
+      go
+      buf
+      protoc-gen-go
+    ];
+    
+    libs = [
+      stdenv.cc.cc
+    ];
 
-  shellHook = '''';
-
-  buildInputs = tools ++ libs;
-  LD_LIBRARY_PATH = lib.makeLibraryPath libs;
+    buildInputs = tools ++ libs;
+    LD_LIBRARY_PATH = lib.makeLibraryPath libs;
+    GOROOT = "${pkgs.go}/share/go";
 }

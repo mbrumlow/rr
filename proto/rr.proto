@@ -1,19 +1,30 @@
 syntax = "proto3";
 
-package example;
+package rr;
 
 option go_package = "rr/gen/go/rr";
 
-// Define a simple message
-message HelloRequest {
+message Run {
   string name = 1;
 }
 
-message HelloResponse {
-  string message = 1;
+message RunEvent{
 }
 
-// Define a simple service
-service Greeter {
-  rpc SayHello (HelloRequest) returns (HelloResponse);
+message LineEvent {
 }
+
+message ResultEvent {
+}
+
+message Message {
+  oneof Msg{
+    Run run =  1;
+    File file = 2; 
+    RunEvent run_event = 3; 
+    LineEvent line_event = 4;
+    ResultEvent restult_event = 5; 
+  }
+};
+
+
