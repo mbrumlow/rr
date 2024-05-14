@@ -28,8 +28,7 @@ func NewEventDB(p string, eventMap EventMap) (*EventDB, error) {
 	}
 
 	if _, err = db.Exec(`
-DROP TABLE IF EXISTS event;
-CREATE TABLE event (
+CREATE TABLE IF NOT EXISTS event (
     id INTEGER PRIMARY KEY,
     timestamp DATETIME,
     grp INTEGER,
@@ -49,9 +48,8 @@ CREATE TABLE event (
 	}
 
 	return &EventDB{
-		mu: sync.Mutex{},
-		db: db,
-		// stmt:      stmt, //
+		mu:        sync.Mutex{},
+		db:        db,
 		stmtEvent: stmtEvent,
 		eventMap:  eventMap,
 	}, nil
@@ -95,16 +93,44 @@ func (l *EventDB) Events(start, limit int64) ([]*rr.Event, error) {
 	return events, nil
 }
 
-func (l *EventDB) Event(e *rr.Event) error {
-	timestamp := e.Timestamp.AsTime().Format(time.RFC3339)
-	data, err := proto.Marshal(e)
-	if err != nil {
-		return err
-	}
+// func (l *EventDB) Event(e *rr.Event) error {
+// 	timestamp := e.Timestamp.AsTime().Format(time.RFC3339)
+// 	data, err := proto.Marshal(e)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	l.mu.Lock()
+// 	defer l.mu.Unlock()
+// 	if _, err := l.stmtEvent.Exec(e.Id, timestamp, l.eventMap(e), e.Group, data); err != nil {
+// 		return err
+// 	}
+// 	return nil
+// }
+
+func (l *EventDB) Event(events []*rr.Event) error {
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, err := l.stmtEvent.Exec(e.Id, timestamp, l.eventMap(e), e.Group, data); err != nil {
+
+	tx, err := l.db.Begin()
+	if err != nil {
+		tx.Rollback()
 		return err
 	}
+
+	for _, e := range events {
+		timestamp := e.Timestamp.AsTime().Format(time.RFC3339)
+		data, err := proto.Marshal(e)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
+		if _, err := l.stmtEvent.Exec(e.Id, timestamp, l.eventMap(e), e.Group, data); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+
+	tx.Commit()
 	return nil
 }

@@ -41,9 +41,13 @@ files:
 commands:
   local:
     - run: ls -la
+  remote:
     - run: date
-    - run: whoami
     - run: find .
+
+    # - run: date
+    # - run: whoami
+    # - run: find .
     # - run: find / 
   
   # local: 

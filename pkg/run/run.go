@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +29,8 @@ type Run struct {
 
 type Execution struct {
 	id string
+
+	spec []byte
 
 	run *Run
 	log *eventdb.EventDB
@@ -52,21 +56,20 @@ type Follower interface {
 }
 
 func File(p string, follower Follower) error {
-
-	file, err := os.Open(p)
+	spec, err := os.ReadFile(p)
 	if err != nil {
 		return err
 	}
 
-	run := &Run{}
-	if err := yaml.NewDecoder(file).Decode(run); err != nil {
+	var run Run
+	if err := yaml.Unmarshal(spec, &run); err != nil {
 		return err
 	}
 
-	return Exec(run, true, follower)
+	return Exec(&run, spec, true, follower)
 }
 
-func Exec(run *Run, local bool, follower Follower) error {
+func Exec(run *Run, spec []byte, local bool, follower Follower) error {
 	t := time.Now().UnixNano()
 	randSource := rand.New(rand.NewSource(t))
 
@@ -84,6 +87,7 @@ func Exec(run *Run, local bool, follower Follower) error {
 	var mu sync.Mutex
 	exe := Execution{
 		id:   ulid.String(),
+		spec: spec,
 		run:  run,
 		log:  log,
 		cond: sync.NewCond(&mu),
@@ -92,22 +96,6 @@ func Exec(run *Run, local bool, follower Follower) error {
 	go exe.Run(local)
 	return exe.Attach(follower)
 }
-
-// func Serve() error {
-
-// 	// TODO: gob decode request?
-// 	// TODO: new DB
-// 	// TODO: Run remote
-// 	// TODO: follower
-// Follower copies events over the network with gob encode
-// ID is for run is kept the same for the caller.
-
-// We need to log
-// ID, Hash of file, time we did it, name, total result.
-// One file per run
-// Show last 15 by default, but more can be shown.
-
-// }
 
 func (e *Execution) Attach(display Follower) error {
 	var last int64
@@ -157,9 +145,20 @@ func (e *Execution) Commands(local bool) []Command {
 
 func (e *Execution) Run(local bool) error {
 
+	fmt.Printf("RUN CALLED: %v\n", local)
+
 	for cmdID, c := range e.Commands(local) {
+		fmt.Printf("DEBUG: RUNNING COMMAND: %v -> %v: %v\n",
+			local, cmdID, c.Run)
 		if err := e.runCommand(cmdID, c); err != nil {
-			return nil
+			log.Printf("COMMAND FAILED: %v\n", err)
+			return err
+		}
+	}
+
+	if local {
+		if err := e.remote(); err != nil {
+			return err
 		}
 	}
 
@@ -171,7 +170,38 @@ func (e *Execution) Run(local bool) error {
 	return nil
 }
 
-func (e *Execution) remote() {
+func (e *Execution) remote() error {
+
+	conn, err := net.Dial("tcp", "127.0.0.1:3923")
+	if err != nil {
+		return err
+	}
+
+	client := &Client{}
+
+	if err := client.WriteMessage(conn,
+		&rr.Message{
+			Msg: &rr.Message_Run{
+				Run: &rr.Run{
+					Id:         e.id,
+					Spec:       e.spec,
+					FirstEvent: atomic.AddInt64(&e.events, 1),
+				},
+			},
+		},
+	); err != nil {
+		return err
+	}
+
+	for {
+		rr, err := client.ReadMessage(conn)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("NEW RR: %v\n", rr)
+	}
+
+	return nil
 
 	// Gob Encode run obejct
 	// Send run object.
@@ -187,7 +217,7 @@ func (e *Execution) remote() {
 
 func (e *Execution) runCommand(cmdID int, c Command) error {
 
-	if err := e.Event(&rr.Event{
+	if err := e.Event([]*rr.Event{&rr.Event{
 		Id:        atomic.AddInt64(&e.count, 1),
 		Timestamp: timestamppb.Now(),
 		Group:     int32(cmdID),
@@ -196,7 +226,7 @@ func (e *Execution) runCommand(cmdID int, c Command) error {
 				Command: c.Run,
 			},
 		},
-	}); err != nil {
+	}}); err != nil {
 		return err
 	}
 
@@ -238,11 +268,14 @@ func (e *Execution) runCommand(cmdID int, c Command) error {
 	return nil
 }
 
-func (e *Execution) Event(event *rr.Event) error {
-	err := e.log.Event(event)
+func (e *Execution) Event(events []*rr.Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	err := e.log.Event(events)
 	e.cond.L.Lock()
 	if err == nil {
-		e.events = event.Id
+		e.events = events[len(events)-1].Id
 	} else {
 		e.done = true
 	}
@@ -253,6 +286,12 @@ func (e *Execution) Event(event *rr.Event) error {
 
 func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	ch := make(chan *rr.Event, 100)
+	defer close(ch)
+
+	wg.Add(1)
+	go e.chanToDB(ch, wg)
 
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
@@ -281,7 +320,37 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 			}
 		}
 
-		if err := e.Event(event); err != nil {
+		ch <- event
+	}
+}
+
+func (e *Execution) chanToDB(ch <-chan *rr.Event, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for {
+		events := make([]*rr.Event, 0)
+		event, ok := <-ch
+		if !ok {
+			return
+		}
+		events = append(events, event)
+		for {
+			done := false
+			select {
+			case event, ok := <-ch:
+				if !ok {
+					return
+				}
+				events = append(events, event)
+			default:
+				done = true
+			}
+			if done || len(events) >= 2 {
+				break
+			}
+		}
+		if err := e.Event(events); err != nil {
+			// Lets not mess with the execution and just log that we
+			// could not to the event db.
 			fmt.Printf("failed to log event: %v", err)
 		}
 	}

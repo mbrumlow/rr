@@ -7,7 +7,15 @@ option go_package = "rr/gen/go/rr";
 import "google/protobuf/timestamp.proto";
 
 message Run {
-  string name = 1;
+  string id = 1; 
+  string name = 2;
+  bytes spec = 3;
+  int64 first_event = 4; 
+  map<string,string> vars = 5; 
+}
+
+message NewEvent {
+  int64 id = 1; 
 }
 
 message RunEvent{
@@ -38,10 +46,11 @@ message Event {
   int32 type = 3; 
   google.protobuf.Timestamp timestamp = 4;
   oneof Event{
-    RunEvent run_event = 5; 
-    StdOutEvent stdout_event = 6;
-    StdErrEvent stderr_event = 7; 
-    ResultEvent restult_event = 8;
+    NewEvent new_event = 5;
+    RunEvent run_event = 6; 
+    StdOutEvent stdout_event = 7;
+    StdErrEvent stderr_event = 8; 
+    ResultEvent restult_event = 9;
   }  
 }
 

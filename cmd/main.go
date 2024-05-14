@@ -37,6 +37,13 @@ func main() {
 
 				},
 			},
+			{
+				Name:    "server",
+				Aliases: []string{"s"},
+				Action: func(c *cli.Context) error {
+					return run.Serve()
+				},
+			},
 		},
 	}
 	if err := app.Run(os.Args); err != nil {
