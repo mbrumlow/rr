@@ -15,7 +15,7 @@ message Run {
 }
 
 message NewEvent {
-  int64 id = 1; 
+  int64 id = 1;
 }
 
 message RunEvent{
@@ -40,6 +40,7 @@ message ResultEvent {
 message File {
 }
 
+
 message Event {
   int64 id = 1; 
   int32 group = 2;
@@ -58,7 +59,7 @@ message Message {
   oneof Msg {
     Run run =  1;
     File file = 2; 
-    Event event = 3; 
+    Event event = 3;
   }
 };
 

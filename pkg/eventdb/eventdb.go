@@ -40,6 +40,16 @@ CREATE TABLE IF NOT EXISTS event (
 		return nil, err
 	}
 
+	//
+
+	if _, err = db.Exec(`PRAGMA read_uncommitted = true;`); err != nil {
+		return nil, err
+	}
+
+	if _, err = db.Exec(`PRAGMA journal_mode = wal;`); err != nil {
+		return nil, err
+	}
+
 	insertEventSQL := `INSERT INTO event (id, timestamp, grp, typ, data) VALUES (?, ?, ?, ?, ?)`
 	stmtEvent, err := db.Prepare(insertEventSQL)
 	if err != nil {

@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"fmt"
 	"io"
-	"log"
 	"math/rand"
 	"net"
 	"os"
@@ -85,7 +84,7 @@ func Exec(run *Run, spec []byte, local bool, follower Follower) error {
 	}
 
 	var mu sync.Mutex
-	exe := Execution{
+	exe := &Execution{
 		id:   ulid.String(),
 		spec: spec,
 		run:  run,
@@ -94,11 +93,11 @@ func Exec(run *Run, spec []byte, local bool, follower Follower) error {
 	}
 
 	go exe.Run(local)
-	return exe.Attach(follower)
+	return exe.Attach(follower, 0)
 }
 
-func (e *Execution) Attach(display Follower) error {
-	var last int64
+func (e *Execution) Attach(display Follower, start int64) error {
+	last := start
 	for {
 		max, more := e.WaitForEvent(last)
 		for last < max {
@@ -145,21 +144,28 @@ func (e *Execution) Commands(local bool) []Command {
 
 func (e *Execution) Run(local bool) error {
 
-	fmt.Printf("RUN CALLED: %v\n", local)
+	// fmt.Printf("RUN CALLED: %v- EVENTID START: %v\n", local, atomic.LoadInt64(&e.count))
 
 	for cmdID, c := range e.Commands(local) {
-		fmt.Printf("DEBUG: RUNNING COMMAND: %v -> %v: %v\n",
-			local, cmdID, c.Run)
+		// fmt.Printf("DEBUG: RUNNING COMMAND: %v -> %v: %v\n",
+		// local, cmdID, c.Run)
 		if err := e.runCommand(cmdID, c); err != nil {
-			log.Printf("COMMAND FAILED: %v\n", err)
+			// log.Printf("COMMAND FAILED: %v\n", err)
 			return err
 		}
 	}
 
 	if local {
 		if err := e.remote(); err != nil {
+			e.cond.L.Lock()
+			e.done = true
+			e.cond.Broadcast()
+			e.cond.L.Unlock()
+
+			fmt.Printf("REMOTE ERROR: %v\n", err)
 			return err
 		}
+		fmt.Printf("RETURN FROM REMOTE\n")
 	}
 
 	e.cond.L.Lock()
@@ -167,6 +173,7 @@ func (e *Execution) Run(local bool) error {
 	e.cond.Broadcast()
 	e.cond.L.Unlock()
 
+	fmt.Printf("returning from run\n")
 	return nil
 }
 
@@ -176,16 +183,16 @@ func (e *Execution) remote() error {
 	if err != nil {
 		return err
 	}
+	defer conn.Close()
 
 	client := &Client{}
-
 	if err := client.WriteMessage(conn,
 		&rr.Message{
 			Msg: &rr.Message_Run{
 				Run: &rr.Run{
 					Id:         e.id,
 					Spec:       e.spec,
-					FirstEvent: atomic.AddInt64(&e.events, 1),
+					FirstEvent: atomic.LoadInt64(&e.events),
 				},
 			},
 		},
@@ -194,14 +201,31 @@ func (e *Execution) remote() error {
 	}
 
 	for {
-		rr, err := client.ReadMessage(conn)
+		m, err := client.ReadMessage(conn)
 		if err != nil {
+			fmt.Printf("ENDING READ MESSAGE\n")
 			return err
 		}
-		fmt.Printf("NEW RR: %v\n", rr)
-	}
 
-	return nil
+		// fmt.Printf("NEW MESSGGE: %v\n", m)
+
+		switch msg := m.Msg.(type) {
+		case *rr.Message_Event:
+			switch event := msg.Event.Event.(type) {
+			case *rr.Event_NewEvent:
+				// fmt.Printf("NEWE EVENT ID: %v\n", event.NewEvent.Id)
+				e.cond.L.Lock()
+				e.events = event.NewEvent.Id
+				e.cond.Broadcast()
+				e.cond.L.Unlock()
+			default:
+				fmt.Printf("\nUNHANDLED Event: %v\n", m)
+			}
+		default:
+			fmt.Printf("\nUNHANDLED MESSAGE: %v\n", msg)
+		}
+
+	}
 
 	// Gob Encode run obejct
 	// Send run object.
@@ -217,7 +241,7 @@ func (e *Execution) remote() error {
 
 func (e *Execution) runCommand(cmdID int, c Command) error {
 
-	if err := e.Event([]*rr.Event{&rr.Event{
+	if err := e.Event([]*rr.Event{{
 		Id:        atomic.AddInt64(&e.count, 1),
 		Timestamp: timestamppb.Now(),
 		Group:     int32(cmdID),
@@ -304,6 +328,7 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 			Group:     int32(grp),
 			Timestamp: timestamppb.Now(),
 		}
+		// fmt.Printf("DEBUG DEBUG WUT: %v\n", event.Id)
 
 		switch typ {
 		case STDOUT:
@@ -320,34 +345,41 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 			}
 		}
 
+		// fmt.Printf("EVENT TO CHAN: %v\n", event)
+
 		ch <- event
 	}
 }
 
 func (e *Execution) chanToDB(ch <-chan *rr.Event, wg *sync.WaitGroup) {
 	defer wg.Done()
-	for {
+	exit := false
+	for !exit {
 		events := make([]*rr.Event, 0)
 		event, ok := <-ch
 		if !ok {
 			return
 		}
+		// fmt.Printf("GOT ONE FROM CHAN CHECKING FOR MORE\n")
 		events = append(events, event)
-		for {
+		for !exit {
 			done := false
 			select {
 			case event, ok := <-ch:
 				if !ok {
-					return
+					exit = true
+				} else {
+					events = append(events, event)
 				}
-				events = append(events, event)
 			default:
+				// fmt.Printf("NO MORE TO BE HAD\n")
 				done = true
 			}
-			if done || len(events) >= 2 {
+			if done || len(events) >= 1 {
 				break
 			}
 		}
+		// fmt.Printf("ADDING %v events to db\n", len(events))
 		if err := e.Event(events); err != nil {
 			// Lets not mess with the execution and just log that we
 			// could not to the event db.

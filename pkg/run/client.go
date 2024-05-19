@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"path/filepath"
 	"rr/gen/go/proto/rr"
 	"rr/pkg/eventdb"
-	"rr/pkg/tui"
 	"sync"
 
 	"google.golang.org/protobuf/proto"
@@ -52,6 +52,7 @@ func Serve() error {
 }
 
 func (c *Client) Serve(conn net.Conn) {
+	defer conn.Close()
 	for {
 		fmt.Print("reading message\n")
 		message, err := c.ReadMessage(conn)
@@ -66,13 +67,15 @@ func (c *Client) Serve(conn net.Conn) {
 				log.Printf("failed to run: %v", err)
 				return
 			}
+			fmt.Printf("SEVER CLOSE CONNECTION DONE\n")
+			return
 		}
 	}
 }
 
 func (c *Client) ReadMessage(conn net.Conn) (*rr.Message, error) {
 
-	fmt.Printf("about to read message len\n")
+	//	fmt.Printf("about to read message len\n")
 
 	var length uint32
 	if err := binary.Read(
@@ -83,7 +86,7 @@ func (c *Client) ReadMessage(conn net.Conn) (*rr.Message, error) {
 		return nil, err
 	}
 
-	fmt.Printf("GOT LEN: %v", length)
+	//	fmt.Printf("GOT LEN: %v", length)
 
 	buf := make([]byte, length)
 	if _, err := conn.Read(buf); err != nil {
@@ -106,24 +109,24 @@ func (c *Client) WriteMessage(conn net.Conn, msg *rr.Message) error {
 
 	length := uint32(len(buf))
 
-	fmt.Printf("sending message length: %v\n", length)
+	//fmt.Printf("sending message length: %v\n", length)
 	if err := binary.Write(conn, binary.LittleEndian, &length); err != nil {
 		return err
 	}
 
-	fmt.Printf("sending message of length: %v", length)
+	//	fmt.Printf("sending message of length: %v", length)
 	if _, err := conn.Write(buf); err != nil {
 		return err
 	}
 
-	fmt.Printf("done sending message\n")
+	// fmt.Printf("done sending message\n")
 
 	return nil
 }
 
 func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 
-	fmt.Printf("spec: %v\n", string(msg.Run.Spec))
+	// fmt.Printf("spec: %v\n", string(msg.Run.Spec))
 
 	var run Run
 	if err := yaml.Unmarshal(msg.Run.Spec, &run); err != nil {
@@ -131,6 +134,11 @@ func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 	}
 
 	dbPath := filepath.Join("test", msg.Run.Id+".db")
+	fmt.Printf("DB PATH: %v\n", dbPath)
+	eventNotify := false
+	if _, err := os.Stat(dbPath); err == nil {
+		eventNotify = true
+	}
 
 	// TODO: if file exist, then we should log to db here, but only signal
 	// remote(local) listener when the log is updated so it can process it.
@@ -143,8 +151,10 @@ func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 
 	fmt.Printf("LOG: %v\n", eventdb)
 
+	// fmt.Printf("msg.Run.FirstEvent: %v\n", msg.Run.FirstEvent)
+
 	var mu sync.Mutex
-	exe := Execution{
+	exe := &Execution{
 		id:     msg.Run.Id,
 		spec:   msg.Run.Spec,
 		run:    &run,
@@ -155,13 +165,45 @@ func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 	}
 
 	go exe.Run(false)
-
-	f := &tui.Simple{}
-	return exe.Attach(f)
+	return exe.Attach(c.relay(conn, eventNotify), msg.Run.FirstEvent)
 
 	// we have raw run yaml in this.
 	// copy id
 	// construct run object
 	// run run object
 	// stream renders back to the network over the wire.
+}
+
+func (c *Client) relay(conn net.Conn, eventNoitfy bool) Follower {
+	if eventNoitfy {
+		return &EventNotify{
+			client: c,
+			conn:   conn,
+		}
+	} else {
+		return nil
+	}
+}
+
+type EventNotify struct {
+	client *Client
+	conn   net.Conn
+}
+
+func (e *EventNotify) Render(event *rr.Event) error {
+
+	// fmt.Printf("SENDING NEW EVENT NOTIFY: %v\n", event.Id)
+
+	return e.client.WriteMessage(e.conn, &rr.Message{
+		Msg: &rr.Message_Event{
+			Event: &rr.Event{
+				Id: event.Id,
+				Event: &rr.Event_NewEvent{
+					NewEvent: &rr.NewEvent{
+						Id: event.Id,
+					},
+				},
+			},
+		},
+	})
 }
