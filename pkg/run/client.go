@@ -17,9 +17,12 @@ import (
 
 type Client struct {
 	conn net.Conn
+
+	remoteAddr string
+	debug      bool
 }
 
-func Serve() error {
+func Serve(debug bool) error {
 
 	// TODO: gob decode request?
 	// TODO: new DB
@@ -45,37 +48,62 @@ func Serve() error {
 			log.Printf("connection failure: %v", err)
 		}
 
-		client := &Client{}
+		client := &Client{
+			remoteAddr: conn.RemoteAddr().String(),
+			debug:      debug,
+		}
 		go client.Serve(conn)
 	}
 
 }
 
+func (c *Client) log(typ, format string, a ...any) {
+	log.Printf(
+		"%v - %v: %v",
+		typ,
+		c.remoteAddr,
+		fmt.Sprintf(format, a...),
+	)
+}
+
+func (c *Client) Log(format string, a ...any) {
+	c.log("INFO ", format, a...)
+}
+
+func (c *Client) Error(format string, a ...any) {
+	c.log("ERROR", format, a...)
+}
+
+func (c *Client) Debug(format string, a ...any) {
+	if c.debug {
+		c.log("DEBUG", format, a...)
+	}
+}
+
 func (c *Client) Serve(conn net.Conn) {
 	defer conn.Close()
 	for {
-		fmt.Print("reading message\n")
+		c.Debug("reading message")
 		message, err := c.ReadMessage(conn)
 		if err != nil {
-			log.Printf("failed to read message: %v", err)
+			c.Error("failed to read message: %v", err)
 			return
 		}
 
 		switch msg := message.Msg.(type) {
 		case *rr.Message_Run:
+			c.Debug("message Run received")
+			c.Log("Run ID: %v", msg.Run.Id)
 			if err := c.Run(conn, msg); err != nil {
 				log.Printf("failed to run: %v", err)
 				return
 			}
-			fmt.Printf("SEVER CLOSE CONNECTION DONE\n")
 			return
 		}
 	}
 }
 
 func (c *Client) ReadMessage(conn net.Conn) (*rr.Message, error) {
-
-	//	fmt.Printf("about to read message len\n")
 
 	var length uint32
 	if err := binary.Read(
@@ -85,8 +113,6 @@ func (c *Client) ReadMessage(conn net.Conn) (*rr.Message, error) {
 	); err != nil {
 		return nil, err
 	}
-
-	//	fmt.Printf("GOT LEN: %v", length)
 
 	buf := make([]byte, length)
 	if _, err := conn.Read(buf); err != nil {
@@ -102,31 +128,25 @@ func (c *Client) ReadMessage(conn net.Conn) (*rr.Message, error) {
 
 func (c *Client) WriteMessage(conn net.Conn, msg *rr.Message) error {
 
+	c.Debug("sending message")
 	buf, err := proto.Marshal(msg)
 	if err != nil {
 		return err
 	}
-
 	length := uint32(len(buf))
-
-	//fmt.Printf("sending message length: %v\n", length)
+	c.Debug("sending message length: %v", length)
 	if err := binary.Write(conn, binary.LittleEndian, &length); err != nil {
 		return err
 	}
-
-	//	fmt.Printf("sending message of length: %v", length)
+	c.Debug("sending message of length: %v", length)
 	if _, err := conn.Write(buf); err != nil {
 		return err
 	}
-
-	// fmt.Printf("done sending message\n")
-
+	c.Debug("done sending message")
 	return nil
 }
 
 func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
-
-	// fmt.Printf("spec: %v\n", string(msg.Run.Spec))
 
 	var run Run
 	if err := yaml.Unmarshal(msg.Run.Spec, &run); err != nil {
@@ -134,7 +154,9 @@ func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 	}
 
 	dbPath := filepath.Join("test", msg.Run.Id+".db")
-	fmt.Printf("DB PATH: %v\n", dbPath)
+
+	c.Debug("log path: %v", dbPath)
+
 	eventNotify := false
 	if _, err := os.Stat(dbPath); err == nil {
 		eventNotify = true
@@ -148,10 +170,6 @@ func (c *Client) Run(conn net.Conn, msg *rr.Message_Run) error {
 		log.Printf("failed to open database: %v", err)
 		return err
 	}
-
-	fmt.Printf("LOG: %v\n", eventdb)
-
-	// fmt.Printf("msg.Run.FirstEvent: %v\n", msg.Run.FirstEvent)
 
 	var mu sync.Mutex
 	exe := &Execution{
@@ -191,9 +209,6 @@ type EventNotify struct {
 }
 
 func (e *EventNotify) Render(event *rr.Event) error {
-
-	// fmt.Printf("SENDING NEW EVENT NOTIFY: %v\n", event.Id)
-
 	return e.client.WriteMessage(e.conn, &rr.Message{
 		Msg: &rr.Message_Event{
 			Event: &rr.Event{

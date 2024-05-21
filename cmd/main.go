@@ -40,8 +40,14 @@ func main() {
 			{
 				Name:    "server",
 				Aliases: []string{"s"},
+				Flags: []cli.Flag{
+					&cli.BoolFlag{
+						Name: "debug",
+					},
+				},
 				Action: func(c *cli.Context) error {
-					return run.Serve()
+					debug := c.Bool("debug")
+					return run.Serve(debug)
 				},
 			},
 		},

@@ -48,8 +48,8 @@ commands:
 
     # - run: date
     # - run: whoami
-    # - run: find .
-    - run: find / 
+    - run: find .
+    # - run: find / 
   
   # local: 
   #   - run: ls -la   
