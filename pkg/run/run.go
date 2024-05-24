@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"rr/gen/go/proto/rr"
 	"rr/pkg/eventdb"
+	"rr/pkg/log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,9 @@ type Follower interface {
 }
 
 func File(p string, follower Follower) error {
+
+	logger := log.NewSimpleLog(false)
+
 	spec, err := os.ReadFile(p)
 	if err != nil {
 		return err
@@ -65,16 +69,17 @@ func File(p string, follower Follower) error {
 		return err
 	}
 
-	return Exec(&run, spec, true, follower)
+	return Exec(&run, spec, true, follower, logger)
 }
 
-func Exec(run *Run, spec []byte, local bool, follower Follower) error {
+func Exec(run *Run, spec []byte, local bool, follower Follower, logger log.Logger) error {
 	t := time.Now().UnixNano()
 	randSource := rand.New(rand.NewSource(t))
 
 	ulid := ulid.MustNew(ulid.Timestamp(time.Now()), randSource)
 
 	dbPath := filepath.Join("test", ulid.String()+".db")
+
 	// TODO: create uniqe id for the run.
 
 	// Create database for the run.
@@ -92,7 +97,7 @@ func Exec(run *Run, spec []byte, local bool, follower Follower) error {
 		cond: sync.NewCond(&mu),
 	}
 
-	go exe.Run(local)
+	go exe.Run(local, logger)
 	return exe.Attach(follower, 0)
 }
 
@@ -142,30 +147,25 @@ func (e *Execution) Commands(local bool) []Command {
 	return e.run.Commands.Remote
 }
 
-func (e *Execution) Run(local bool) error {
-
-	// fmt.Printf("RUN CALLED: %v- EVENTID START: %v\n", local, atomic.LoadInt64(&e.count))
+func (e *Execution) Run(local bool, logger log.Logger) error {
 
 	for cmdID, c := range e.Commands(local) {
-		// fmt.Printf("DEBUG: RUNNING COMMAND: %v -> %v: %v\n",
-		// local, cmdID, c.Run)
+		if !local {
+			logger.Log("running %v: %v", cmdID, c.Run)
+		}
 		if err := e.runCommand(cmdID, c); err != nil {
-			// log.Printf("COMMAND FAILED: %v\n", err)
 			return err
 		}
 	}
 
 	if local {
-		if err := e.remote(); err != nil {
+		if err := e.remote(logger); err != nil {
 			e.cond.L.Lock()
 			e.done = true
 			e.cond.Broadcast()
 			e.cond.L.Unlock()
-
-			fmt.Printf("REMOTE ERROR: %v\n", err)
 			return err
 		}
-		fmt.Printf("RETURN FROM REMOTE\n")
 	}
 
 	e.cond.L.Lock()
@@ -173,11 +173,10 @@ func (e *Execution) Run(local bool) error {
 	e.cond.Broadcast()
 	e.cond.L.Unlock()
 
-	fmt.Printf("returning from run\n")
 	return nil
 }
 
-func (e *Execution) remote() error {
+func (e *Execution) remote(logger log.Logger) error {
 
 	conn, err := net.Dial("tcp", "127.0.0.1:3923")
 	if err != nil {
@@ -185,7 +184,9 @@ func (e *Execution) remote() error {
 	}
 	defer conn.Close()
 
-	client := &Client{}
+	client := &Client{
+		log: logger,
+	}
 	if err := client.WriteMessage(conn,
 		&rr.Message{
 			Msg: &rr.Message_Run{
@@ -202,27 +203,26 @@ func (e *Execution) remote() error {
 
 	for {
 		m, err := client.ReadMessage(conn)
-		if err != nil {
-			fmt.Printf("ENDING READ MESSAGE\n")
+		if err == io.EOF {
+			return nil
+		} else if err != nil {
+			client.log.Error("error reading message: %v", err)
 			return err
 		}
-
-		// fmt.Printf("NEW MESSGGE: %v\n", m)
 
 		switch msg := m.Msg.(type) {
 		case *rr.Message_Event:
 			switch event := msg.Event.Event.(type) {
 			case *rr.Event_NewEvent:
-				// fmt.Printf("NEWE EVENT ID: %v\n", event.NewEvent.Id)
 				e.cond.L.Lock()
 				e.events = event.NewEvent.Id
 				e.cond.Broadcast()
 				e.cond.L.Unlock()
 			default:
-				fmt.Printf("\nUNHANDLED Event: %v\n", m)
+				client.log.Error("un-handled event: %v", m)
 			}
 		default:
-			fmt.Printf("\nUNHANDLED MESSAGE: %v\n", msg)
+			client.log.Error("un-handled message: %v", m)
 		}
 
 	}
@@ -328,7 +328,6 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 			Group:     int32(grp),
 			Timestamp: timestamppb.Now(),
 		}
-		// fmt.Printf("DEBUG DEBUG WUT: %v\n", event.Id)
 
 		switch typ {
 		case STDOUT:
@@ -344,8 +343,6 @@ func (e *Execution) logLines(reader io.Reader, grp, typ int, wg *sync.WaitGroup)
 				},
 			}
 		}
-
-		// fmt.Printf("EVENT TO CHAN: %v\n", event)
 
 		ch <- event
 	}
